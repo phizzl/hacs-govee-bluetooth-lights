@@ -8,7 +8,7 @@ from enum import IntEnum
 import time
 import bleak_retry_connector
 
-from bleak import BleakClient
+from bleak import BleakClient, BLEDevice
 from homeassistant.components import bluetooth
 from homeassistant.components.light import (ATTR_BRIGHTNESS, ATTR_RGB_COLOR, ATTR_COLOR_TEMP_KELVIN, ColorMode, LightEntity)
 from homeassistant.helpers.entity import DeviceInfo
@@ -40,7 +40,7 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
     async_add_entities([GoveeBluetoothLight(light, ble_device)])
 
 class GoveeBluetoothLight(LightEntity):
-    def __init__(self, light, ble_device) -> None:
+    def __init__(self, light, ble_device: BLEDevice) -> None:
         """Initialize a bluetooth light."""
         self._mac = light.address
         self._ble_device = ble_device
@@ -48,15 +48,15 @@ class GoveeBluetoothLight(LightEntity):
         # Set inherited attributes
         self._attr_color_mode = ColorMode.RGB
         self._attr_supported_color_modes = {ColorMode.RGB, ColorMode.COLOR_TEMP, ColorMode.BRIGHTNESS}
-        self._attr_name = f"Govee Light {ble_device['device_name']}"
+        self._attr_name = f"Govee Light {ble_device.name}"
         self._attr_unique_id = self._mac.replace(":", "")
         self._attr_brightness = None
         self._attr_color_temp_kelvin = None
         self._attr_rgb_color = None
         self._attr_is_on = False
         self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, self._ble_device["device_id"])},
-            name=self._ble_device["device_name"]
+            identifiers={(DOMAIN, self._ble_device.address)},
+            name=self._ble_device.name
         )
 
     async def async_turn_on(self, **kwargs) -> None:
