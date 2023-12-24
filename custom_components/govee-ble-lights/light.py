@@ -50,11 +50,7 @@ class GoveeBluetoothLight(LightEntity):
         self._attr_color_mode = ColorMode.RGB
         self._attr_supported_color_modes = {ColorMode.RGB, ColorMode.COLOR_TEMP, ColorMode.BRIGHTNESS}
         self._attr_name = f"Govee Light {ble_device['device_name']}"
-
-    @property
-    def unique_id(self) -> str:
-        """Return a unique, Home Assistant friendly identifier for this entity."""
-        return self._mac.replace(":", "")
+        self._attr_unique_id = self._mac.replace(":", "")
 
     @property
     def brightness(self):
