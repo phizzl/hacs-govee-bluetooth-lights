@@ -61,20 +61,22 @@ class GoveeBluetoothLight(LightEntity):
 
     async def async_turn_on(self, **kwargs) -> None:
         await self._sendBluetoothData(LedCommand.POWER, [0x1])
-        self._state = True
+        self._attr_is_on = True
 
         if ATTR_BRIGHTNESS in kwargs:
             brightness = kwargs.get(ATTR_BRIGHTNESS, 255)
+
             await self._sendBluetoothData(LedCommand.BRIGHTNESS, [brightness])
-            self._brightness = brightness
+            self._attr_brightness = brightness
 
         if ATTR_RGB_COLOR in kwargs:
             red, green, blue = kwargs.get(ATTR_RGB_COLOR)
             await self._sendBluetoothData(LedCommand.COLOR, [LedMode.MANUAL, red, green, blue])
+            self._attr_rgb_color = (red, green, blue)
 
     async def async_turn_off(self, **kwargs) -> None:
         await self._sendBluetoothData(LedCommand.POWER, [0x0])
-        self._state = False
+        self._attr_is_on = False
 
     async def _connectBluetooth(self) -> BleakClient:
         client = await bleak_retry_connector.establish_connection(BleakClient, self._ble_device, self.unique_id)
