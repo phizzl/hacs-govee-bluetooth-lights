@@ -40,26 +40,19 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
 
 class GoveeBluetoothLight(LightEntity):
     def __init__(self, light, ble_device) -> None:
-        """Initialize an bluetooth light."""
+        """Initialize a bluetooth light."""
         self._mac = light.address
         self._ble_device = ble_device
-        self._state = None
-        self._brightness = None
 
         # Set inherited attributes
         self._attr_color_mode = ColorMode.RGB
         self._attr_supported_color_modes = {ColorMode.RGB, ColorMode.COLOR_TEMP, ColorMode.BRIGHTNESS}
         self._attr_name = f"Govee Light {ble_device['device_name']}"
         self._attr_unique_id = self._mac.replace(":", "")
-
-    @property
-    def brightness(self):
-        return self._brightness
-
-    @property
-    def is_on(self) -> bool | None:
-        """Return true if light is on."""
-        return self._state
+        self._attr_brightness = None
+        self._attr_color_temp_kelvin = None
+        self._attr_rgb_color = None
+        self._attr_is_on = False
 
     async def async_turn_on(self, **kwargs) -> None:
         await self._sendBluetoothData(LedCommand.POWER, [0x1])
