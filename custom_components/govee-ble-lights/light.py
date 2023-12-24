@@ -49,11 +49,7 @@ class GoveeBluetoothLight(LightEntity):
         # Set inherited attributes
         self._attr_color_mode = ColorMode.RGB
         self._attr_supported_color_modes = {ColorMode.RGB, ColorMode.COLOR_TEMP, ColorMode.BRIGHTNESS}
-
-    @property
-    def name(self) -> str:
-        """Return the name of the switch."""
-        return "GOVEE Light"
+        self._attr_name = f"Govee Light {ble_device['device_name']}"
 
     @property
     def unique_id(self) -> str:
