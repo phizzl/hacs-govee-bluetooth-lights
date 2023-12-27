@@ -136,7 +136,7 @@ class GoveeBluetoothLight(LightEntity):
 
                 self._attr_is_on = is_on
             elif type == "04":
-                brightness_govee = int(response[4:6])
+                brightness_govee = int(response[4:6], 16)
                 brightness_percent = math.ceil(((brightness_govee / 64) * 100))
                 brightness = math.ceil((255 / 100) * brightness_percent)
                 _LOGGER.debug(
