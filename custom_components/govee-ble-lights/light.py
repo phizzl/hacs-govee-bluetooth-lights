@@ -14,7 +14,7 @@ from homeassistant.components.light import (ATTR_BRIGHTNESS, ATTR_RGB_COLOR, ATT
 from homeassistant.helpers.entity import DeviceInfo
 
 from .const import DOMAIN, GOVEE_READ_CHAR
-from .helper import rgb_to_hex, hex_to_rgb, ble_get_write_characteristic, ble_get_command
+from .helper import rgb_to_hex, hex_to_rgb, ble_get_write_characteristic, ble_get_command, kelvin_to_hex
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -61,7 +61,6 @@ class GoveeBluetoothLight(LightEntity):
 
         self._attr_is_on = True
 
-
         if ATTR_BRIGHTNESS in kwargs:
             brightness_ha = kwargs.get(ATTR_BRIGHTNESS, 255)
             brightness_percent = math.ceil(brightness_ha / 255 * 100)
@@ -70,19 +69,27 @@ class GoveeBluetoothLight(LightEntity):
             payload = "3304" + brightness + "00000000000000000000000000000000"
             payloads.append(payload)
             _LOGGER.debug(
-                f"[async_turn_on|%s] Setting brightness to %s",
+                f"[async_turn_on|%s] Setting brightness to %s (%s)",
                 self._ble_device.address,
-                str(brightness_percent)
+                str(brightness_percent),
+                brightness_ha
             )
 
             self._attr_brightness = brightness_ha
 
         if ATTR_RGB_COLOR in kwargs:
             red, green, blue = kwargs.get(ATTR_RGB_COLOR)
-            hex_color = await rgb_to_hex(red, green, blue)
+            hex_color = rgb_to_hex(red, green, blue)
             payload = "33050d" + hex_color.lower() + "00000000000000000000000000"
             payloads.append(payload)
-            _LOGGER.debug(f"[async_turn_on|%s] Setting color to %s", self._ble_device.address, hex_color)
+            _LOGGER.debug(
+                f"[async_turn_on|%s] Setting color to %s, (%s, %s, %s)",
+                self._ble_device.address,
+                hex_color,
+                red,
+                green,
+                blue
+            )
 
             self._attr_rgb_color = (red, green, blue)
 
@@ -90,6 +97,8 @@ class GoveeBluetoothLight(LightEntity):
             color_temp_kelvin = kwargs.get(ATTR_COLOR_TEMP_KELVIN)
             kelvin_hex = hex(color_temp_kelvin)
             kelvin_hex = kelvin_hex[2:].zfill(4)
+            color_hex = kelvin_to_hex(color_temp_kelvin)
+            color_rgb = hex_to_rgb(color_hex)
             payload = "33050dffffff" + kelvin_hex + "0000000000000000000000"
             payloads.append(payload)
             _LOGGER.debug(
@@ -99,6 +108,7 @@ class GoveeBluetoothLight(LightEntity):
             )
 
             self._attr_color_temp_kelvin = color_temp_kelvin
+            self._attr_rgb_color = color_rgb
 
         client = await self._get_connection()
         await self._send_payloads(client, payloads)
@@ -115,36 +125,46 @@ class GoveeBluetoothLight(LightEntity):
     async def async_update(self):
         async def on_notify(client, data):
             response = data.hex()
-            _LOGGER.debug(f"[async_turn_on|%s] Update notification \"%s\"", self._ble_device.address, response)
+            _LOGGER.debug(f"[async_update|%s] Update notification \"%s\"", self._ble_device.address, response)
             if not response.startswith("aa"):
                 return None
 
             type = response[2:4]
             if type == "01":
                 is_on = response[4:6] == "01"
-                _LOGGER.debug(f"[async_turn_on|%s] Powering state %s", self._ble_device.address, str(is_on))
+                _LOGGER.debug(f"[async_update|%s] STATE Powering state %s", self._ble_device.address, str(is_on))
 
                 self._attr_is_on = is_on
             elif type == "04":
                 brightness_govee = int(response[4:6])
                 brightness_percent = math.ceil(((brightness_govee / 64) * 100))
-                brightness = 255 * math.ceil(brightness_percent / 100)
+                brightness = math.ceil((255 / 100) * brightness_percent)
                 _LOGGER.debug(
-                    f"[async_turn_on|%s] Brightness %s",
+                    f"[async_update|%s] STATE Brightness is %s (%s)",
                     self._ble_device.address,
-                    str(brightness_percent)
+                    str(brightness_percent),
+                    str(brightness)
                 )
 
                 self._attr_brightness = brightness
             elif type == "05":
-                color_hex = response[6:12]
-                color_rgb = await hex_to_rgb(color_hex)
                 color_temp_kelvin = int(response[12:16], 16)
+
+                if color_temp_kelvin > 0:
+                    color_hex = kelvin_to_hex(color_temp_kelvin)
+                else:
+                    color_hex = response[6:12]
+
+                color_rgb = hex_to_rgb(color_hex)
+
                 _LOGGER.debug(
-                    f"[async_turn_on|%s] Color %s, color temp %s",
+                    f"[async_update|%s] STATE Color R: %s, G: %s, B: %s (%s), color temp %s",
                     self._ble_device.address,
+                    color_rgb[0],
+                    color_rgb[1],
+                    color_rgb[2],
                     color_hex,
-                    color_temp_kelvin
+                    color_temp_kelvin,
                 )
 
                 self._attr_rgb_color = color_rgb
@@ -158,9 +178,9 @@ class GoveeBluetoothLight(LightEntity):
     async def _send_payloads(self, client: BleakClient, payloads: List[str]):
         rnd = str(random.randint(1, 9999))
 
-        characteristic = await ble_get_write_characteristic(client)
+        characteristic = ble_get_write_characteristic(client)
         for payload in payloads:
-            command = await ble_get_command(payload)
+            command = ble_get_command(payload)
             _LOGGER.debug(f"[_send_payloads|%s/%s] Send command \"%s\"", self._ble_device.address, rnd, command)
             await client.write_gatt_char(characteristic, command)
 
