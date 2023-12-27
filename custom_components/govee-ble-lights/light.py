@@ -1,107 +1,187 @@
 from __future__ import annotations
-from typing import Any
 
+import asyncio
+import math
 import logging
-_LOGGER = logging.getLogger(__name__)
-
-from enum import IntEnum
-import time
+import random
 import bleak_retry_connector
 
-from bleak import BleakClient, BLEDevice
+from bleak import BLEDevice, BleakClient
+from typing import List
 from homeassistant.components import bluetooth
-from homeassistant.components.light import (ATTR_BRIGHTNESS, ATTR_RGB_COLOR, ATTR_COLOR_TEMP_KELVIN, ColorMode, LightEntity)
+from homeassistant.components.light import (ATTR_BRIGHTNESS, ATTR_RGB_COLOR, ATTR_COLOR_TEMP_KELVIN, ColorMode,
+                                            LightEntity)
 from homeassistant.helpers.entity import DeviceInfo
 
-from .const import DOMAIN
+from .const import DOMAIN, GOVEE_READ_CHAR
+from .helper import rgb_to_hex, hex_to_rgb, ble_get_write_characteristic, ble_get_command
 
-UUID_CONTROL_CHARACTERISTIC = '00010203-0405-0607-0809-0a0b0c0d2b11'
+_LOGGER = logging.getLogger(__name__)
 
-class LedCommand(IntEnum):
-    """ A control command packet's type. """
-    POWER      = 0x01
-    BRIGHTNESS = 0x04
-    COLOR      = 0x05
-
-class LedMode(IntEnum):
-    """
-    The mode in which a color change happens in.
-    
-    Currently only manual is supported.
-    """
-    MANUAL     = 0x02
-    MICROPHONE = 0x06
-    SCENES     = 0x05 
 
 async def async_setup_entry(hass, config_entry, async_add_entities):
     light = hass.data[DOMAIN][config_entry.entry_id]
-    #bluetooth setup
+    # bluetooth setup
     ble_device = bluetooth.async_ble_device_from_address(hass, light.address.upper(), False)
     async_add_entities([GoveeBluetoothLight(light, ble_device)])
 
+
 class GoveeBluetoothLight(LightEntity):
+    """Payloads which will be sent to receive the current device status in the corresponding response notification"""
+    update_payloads = [
+        "aa010000000000000000000000000000000000",  # power status
+        "aa040000000000000000000000000000000000",  # brightness
+        "aa050100000000000000000000000000000000",  # color and color temperature
+    ]
+
     def __init__(self, light, ble_device: BLEDevice) -> None:
         """Initialize a bluetooth light."""
-        self._mac = light.address
         self._ble_device = ble_device
 
         # Set inherited attributes
         self._attr_color_mode = ColorMode.RGB
         self._attr_supported_color_modes = {ColorMode.RGB, ColorMode.COLOR_TEMP, ColorMode.BRIGHTNESS}
         self._attr_name = f"Govee Light {ble_device.name}"
-        self._attr_unique_id = self._mac.replace(":", "")
+        self._attr_unique_id = self._ble_device.address.replace(":", "")
         self._attr_brightness = None
         self._attr_color_temp_kelvin = None
+        self._attr_min_color_temp_kelvin = 2000
+        self._attr_max_color_temp_kelvin = 6500
         self._attr_rgb_color = None
         self._attr_is_on = False
+        self._attr_should_poll = True
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, self._ble_device.address)},
             name=self._ble_device.name
         )
 
     async def async_turn_on(self, **kwargs) -> None:
-        await self._sendBluetoothData(LedCommand.POWER, [0x1])
+        payloads = ["33010100000000000000000000000000000000"]
+        _LOGGER.debug(f"[async_turn_on|%s] Powering on", self._ble_device.address)
+
         self._attr_is_on = True
 
-        if ATTR_BRIGHTNESS in kwargs:
-            brightness = kwargs.get(ATTR_BRIGHTNESS, 255)
 
-            await self._sendBluetoothData(LedCommand.BRIGHTNESS, [brightness])
-            self._attr_brightness = brightness
+        if ATTR_BRIGHTNESS in kwargs:
+            brightness_ha = kwargs.get(ATTR_BRIGHTNESS, 255)
+            brightness_percent = math.ceil(brightness_ha / 255 * 100)
+            brightness = str(math.ceil(64 * (brightness_percent / 100))).zfill(2)
+            brightness = "01" if brightness == "00" else brightness
+            payload = "3304" + brightness + "00000000000000000000000000000000"
+            payloads.append(payload)
+            _LOGGER.debug(
+                f"[async_turn_on|%s] Setting brightness to %s",
+                self._ble_device.address,
+                str(brightness_percent)
+            )
+
+            self._attr_brightness = brightness_ha
 
         if ATTR_RGB_COLOR in kwargs:
             red, green, blue = kwargs.get(ATTR_RGB_COLOR)
-            await self._sendBluetoothData(LedCommand.COLOR, [LedMode.MANUAL, red, green, blue])
+            hex_color = await rgb_to_hex(red, green, blue)
+            payload = "33050d" + hex_color.lower() + "00000000000000000000000000"
+            payloads.append(payload)
+            _LOGGER.debug(f"[async_turn_on|%s] Setting color to %s", self._ble_device.address, hex_color)
+
             self._attr_rgb_color = (red, green, blue)
 
+        if ATTR_COLOR_TEMP_KELVIN in kwargs:
+            color_temp_kelvin = kwargs.get(ATTR_COLOR_TEMP_KELVIN)
+            kelvin_hex = hex(color_temp_kelvin)
+            kelvin_hex = kelvin_hex[2:].zfill(4)
+            payload = "33050dffffff" + kelvin_hex + "0000000000000000000000"
+            payloads.append(payload)
+            _LOGGER.debug(
+                f"[async_turn_on|%s] Setting color temperature to %s",
+                self._ble_device.address,
+                color_temp_kelvin
+            )
+
+            self._attr_color_temp_kelvin = color_temp_kelvin
+
+        client = await self._get_connection()
+        await self._send_payloads(client, payloads)
+
     async def async_turn_off(self, **kwargs) -> None:
-        await self._sendBluetoothData(LedCommand.POWER, [0x0])
+        payloads = ["33010000000000000000000000000000000000"]
+        _LOGGER.debug(f"[async_turn_off|%s] Powering off", self._ble_device.address)
+
         self._attr_is_on = False
 
-    async def _connectBluetooth(self) -> BleakClient:
-        client = await bleak_retry_connector.establish_connection(BleakClient, self._ble_device, self.unique_id)
-        return client
+        client = await self._get_connection()
+        await self._send_payloads(client, payloads)
 
-    async def _sendBluetoothData(self, cmd, payload):
-        if not isinstance(cmd, int):
-            raise ValueError('Invalid command')
-        if not isinstance(payload, bytes) and not (isinstance(payload, list) and all(isinstance(x, int) for x in payload)):
-            raise ValueError('Invalid payload')
-        if len(payload) > 17:
-            raise ValueError('Payload too long')
+    async def async_update(self):
+        async def on_notify(client, data):
+            response = data.hex()
+            _LOGGER.debug(f"[async_turn_on|%s] Update notification \"%s\"", self._ble_device.address, response)
+            if not response.startswith("aa"):
+                return None
 
-        cmd = cmd & 0xFF
-        payload = bytes(payload)
+            type = response[2:4]
+            if type == "01":
+                is_on = response[4:6] == "01"
+                _LOGGER.debug(f"[async_turn_on|%s] Powering state %s", self._ble_device.address, str(is_on))
 
-        frame = bytes([0x33, cmd]) + bytes(payload)
-        # pad frame data to 19 bytes (plus checksum)
-        frame += bytes([0] * (19 - len(frame)))
-        
-        # The checksum is calculated by XORing all data bytes
-        checksum = 0
-        for b in frame:
-            checksum ^= b
-        
-        frame += bytes([checksum & 0xFF])
-        client = await self._connectBluetooth()
-        await client.write_gatt_char(UUID_CONTROL_CHARACTERISTIC, frame, False)
+                self._attr_is_on = is_on
+            elif type == "04":
+                brightness_govee = int(response[4:6])
+                brightness_percent = math.ceil(((brightness_govee / 64) * 100))
+                brightness = 255 * math.ceil(brightness_percent / 100)
+                _LOGGER.debug(
+                    f"[async_turn_on|%s] Brightness %s",
+                    self._ble_device.address,
+                    str(brightness_percent)
+                )
+
+                self._attr_brightness = brightness
+            elif type == "05":
+                color_hex = response[6:12]
+                color_rgb = await hex_to_rgb(color_hex)
+                color_temp_kelvin = int(response[12:16], 16)
+                _LOGGER.debug(
+                    f"[async_turn_on|%s] Color %s, color temp %s",
+                    self._ble_device.address,
+                    color_hex,
+                    color_temp_kelvin
+                )
+
+                self._attr_rgb_color = color_rgb
+                self._attr_color_temp_kelvin = color_temp_kelvin
+
+        await asyncio.sleep(1)
+        client = await self._get_connection()
+        await client.start_notify(GOVEE_READ_CHAR, on_notify)
+        await self._send_payloads(client, self.update_payloads)
+
+    async def _send_payloads(self, client: BleakClient, payloads: List[str]):
+        rnd = str(random.randint(1, 9999))
+
+        characteristic = await ble_get_write_characteristic(client)
+        for payload in payloads:
+            command = await ble_get_command(payload)
+            _LOGGER.debug(f"[_send_payloads|%s/%s] Send command \"%s\"", self._ble_device.address, rnd, command)
+            await client.write_gatt_char(characteristic, command)
+
+    async def _get_connection(self) -> BleakClient:
+        max_retries = 5
+        retry_count = 0
+
+        while retry_count < max_retries:
+            try:
+                _LOGGER.debug(
+                    f"[_get_connection|%s] Trying to connect [%s/%s]",
+                    self._ble_device.address,
+                    (retry_count + 1),
+                    max_retries
+                )
+                client = await bleak_retry_connector.establish_connection(BleakClient, self._ble_device,
+                                                                          self._ble_device.address)
+                return client
+            except Exception as e:
+                _LOGGER.debug(f"[_get_connection|%s] Exception: %s", self._ble_device.address, e)
+                retry_count += 1
+                await asyncio.sleep(0.5)
+        else:
+            raise Exception(f"[_get_connection|%s] Connection could not be established", self._ble_device.address)
