@@ -200,7 +200,7 @@ class GoveeBluetoothLight(LightEntity):
                                                                           self._ble_device.address)
                 return client
             except Exception as e:
-                _LOGGER.debug(f"[_get_connection|%s] Exception: %s", self._ble_device.address, e)
+                _LOGGER.warning(f"[_get_connection|%s] Exception: %s", self._ble_device.address, e)
                 retry_count += 1
                 await asyncio.sleep(0.5)
         else:
