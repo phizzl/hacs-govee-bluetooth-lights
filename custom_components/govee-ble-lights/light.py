@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import math
 import logging
 import random
@@ -50,7 +51,7 @@ class GoveeBluetoothLight(LightEntity):
         self._attr_max_color_temp_kelvin = 6500
         self._attr_rgb_color = None
         self._attr_is_on = False
-        self._attr_should_poll = True
+        self._attr_should_poll = False
         self._attr_icon = "mdi:lightbulb"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, self._ble_device.address)},
@@ -129,6 +130,8 @@ class GoveeBluetoothLight(LightEntity):
         _LOGGER.debug(f"[async_update|%s] Update triggered", self._ble_device.name)
         client = await self._get_connection()
         await self._send_payloads(client, self.update_payloads)
+        """Just sleep a few seconds, give Govees notifications time to be received and processed"""
+        await asyncio.sleep(2)
 
     async def _send_payloads(self, client: BleakClient, payloads: List[str]):
         characteristic = ble_get_write_characteristic(client)
