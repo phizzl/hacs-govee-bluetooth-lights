@@ -22,7 +22,7 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
     light = hass.data[DOMAIN][config_entry.entry_id]
     # bluetooth setup
     ble_device = bluetooth.async_ble_device_from_address(hass, light.address.upper(), False)
-    async_add_entities([GoveeBluetoothLight(ble_device)])
+    async_add_entities([GoveeBluetoothLight(ble_device)], update_before_add=True)
 
 
 class GoveeBluetoothLight(LightEntity):
