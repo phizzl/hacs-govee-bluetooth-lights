@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import math
 import logging
 import random
@@ -37,6 +36,8 @@ class GoveeBluetoothLight(LightEntity):
     def __init__(self, light, ble_device: BLEDevice) -> None:
         """Initialize a bluetooth light."""
         self._ble_device = ble_device
+        self._ble_client = None
+        self._ble_connection_rnd = None
 
         # Set inherited attributes
         self._attr_color_mode = ColorMode.RGB
@@ -57,7 +58,7 @@ class GoveeBluetoothLight(LightEntity):
 
     async def async_turn_on(self, **kwargs) -> None:
         payloads = ["33010100000000000000000000000000000000"]
-        _LOGGER.debug(f"[async_turn_on|%s] Powering on", self._ble_device.address)
+        _LOGGER.debug(f"[async_turn_on|%s] Powering on", self._ble_device.name)
 
         self._attr_is_on = True
 
@@ -70,7 +71,7 @@ class GoveeBluetoothLight(LightEntity):
             payloads.append(payload)
             _LOGGER.debug(
                 f"[async_turn_on|%s] Setting brightness to %s (%s)",
-                self._ble_device.address,
+                self._ble_device.name,
                 str(brightness_percent),
                 brightness_ha
             )
@@ -84,7 +85,7 @@ class GoveeBluetoothLight(LightEntity):
             payloads.append(payload)
             _LOGGER.debug(
                 f"[async_turn_on|%s] Setting color to %s, (%s, %s, %s)",
-                self._ble_device.address,
+                self._ble_device.name,
                 hex_color,
                 red,
                 green,
@@ -103,7 +104,7 @@ class GoveeBluetoothLight(LightEntity):
             payloads.append(payload)
             _LOGGER.debug(
                 f"[async_turn_on|%s] Setting color temperature to %s",
-                self._ble_device.address,
+                self._ble_device.name,
                 color_temp_kelvin
             )
 
@@ -115,7 +116,7 @@ class GoveeBluetoothLight(LightEntity):
 
     async def async_turn_off(self, **kwargs) -> None:
         payloads = ["33010000000000000000000000000000000000"]
-        _LOGGER.debug(f"[async_turn_off|%s] Powering off", self._ble_device.address)
+        _LOGGER.debug(f"[async_turn_off|%s] Powering off", self._ble_device.name)
 
         self._attr_is_on = False
 
@@ -123,90 +124,115 @@ class GoveeBluetoothLight(LightEntity):
         await self._send_payloads(client, payloads)
 
     async def async_update(self):
-        async def on_notify(client, data):
-            response = data.hex()
-            _LOGGER.debug(f"[async_update|%s] Update notification \"%s\"", self._ble_device.address, response)
-            if not response.startswith("aa"):
-                return None
-
-            type = response[2:4]
-            if type == "01":
-                is_on = response[4:6] == "01"
-                _LOGGER.debug(f"[async_update|%s] STATE Powering state %s", self._ble_device.address, str(is_on))
-
-                self._attr_is_on = is_on
-            elif type == "04":
-                brightness_govee = response[4:6]
-                if brightness_govee.isdigit():
-                    brightness_govee = int(brightness_govee)
-                else:
-                    brightness_govee = int(response[4:6], 16)
-
-                brightness_percent = math.ceil(((brightness_govee / 64) * 100))
-                brightness = math.ceil((255 / 100) * brightness_percent)
-                _LOGGER.debug(
-                    f"[async_update|%s] STATE Brightness is %s (%s)",
-                    self._ble_device.address,
-                    str(brightness_percent),
-                    str(brightness)
-                )
-
-                self._attr_brightness = brightness
-            elif type == "05":
-                color_temp_kelvin = int(response[12:16], 16)
-
-                if color_temp_kelvin > 0:
-                    color_hex = kelvin_to_hex(color_temp_kelvin)
-                else:
-                    color_hex = response[6:12]
-
-                color_rgb = hex_to_rgb(color_hex)
-
-                _LOGGER.debug(
-                    f"[async_update|%s] STATE Color R: %s, G: %s, B: %s (%s), color temp %s",
-                    self._ble_device.address,
-                    color_rgb[0],
-                    color_rgb[1],
-                    color_rgb[2],
-                    color_hex,
-                    color_temp_kelvin,
-                )
-
-                self._attr_rgb_color = color_rgb
-                self._attr_color_temp_kelvin = color_temp_kelvin
-
-        await asyncio.sleep(1)
+        _LOGGER.debug(f"[async_update|%s] Update triggered", self._ble_device.name)
         client = await self._get_connection()
-        await client.start_notify(GOVEE_READ_CHAR, on_notify)
         await self._send_payloads(client, self.update_payloads)
 
     async def _send_payloads(self, client: BleakClient, payloads: List[str]):
-        rnd = str(random.randint(1, 9999))
-
         characteristic = ble_get_write_characteristic(client)
         for payload in payloads:
             command = ble_get_command(payload)
-            _LOGGER.debug(f"[_send_payloads|%s/%s] Send command \"%s\"", self._ble_device.address, rnd, command)
+            _LOGGER.debug(f"[_send_payloads|%s] Send command \"%s\"", self._ble_device.name, command)
             await client.write_gatt_char(characteristic, command)
 
     async def _get_connection(self) -> BleakClient:
-        max_retries = 5
-        retry_count = 0
+        try:
+            if self._ble_client is None or not self._ble_client.is_connected:
+                self._ble_connection_rnd = random.randint(1000, 9999)
 
-        while retry_count < max_retries:
-            try:
+                def on_disconnect(client):
+                    _LOGGER.debug(
+                        f"[on_disconnect(%s)|%s] Disconnected",
+                        self._ble_connection_rnd,
+                        self._ble_device.name,
+                    )
+
+                async def on_notify(client, data):
+                    response = data.hex()
+                    _LOGGER.debug(
+                        f"[on_notify(%s)|%s] Update notification \"%s\"",
+                        self._ble_connection_rnd,
+                        self._ble_device.name,
+                        response
+                    )
+                    if not response.startswith("aa"):
+                        return None
+
+                    type = response[2:4]
+                    if type == "01":
+                        is_on = response[4:6] == "01"
+                        _LOGGER.debug(
+                            f"[on_notify(%s)|%s] STATE Powering state %s",
+                            self._ble_connection_rnd,
+                            self._ble_device.name,
+                            str(is_on)
+                        )
+
+                        self._attr_is_on = is_on
+                    elif type == "04":
+                        brightness_govee = response[4:6]
+                        if brightness_govee.isdigit():
+                            brightness_govee = int(brightness_govee)
+                        else:
+                            brightness_govee = int(response[4:6], 16)
+
+                        brightness_percent = math.ceil(((brightness_govee / 64) * 100))
+                        brightness = math.ceil((255 / 100) * brightness_percent)
+                        _LOGGER.debug(
+                            f"[on_notify(%s)|%s] STATE Brightness is %s (%s)",
+                            self._ble_connection_rnd,
+                            self._ble_device.name,
+                            str(brightness_percent),
+                            str(brightness)
+                        )
+
+                        self._attr_brightness = brightness
+                    elif type == "05":
+                        color_temp_kelvin = int(response[12:16], 16)
+
+                        if color_temp_kelvin > 0:
+                            color_hex = kelvin_to_hex(color_temp_kelvin)
+                        else:
+                            color_hex = response[6:12]
+
+                        color_rgb = hex_to_rgb(color_hex)
+
+                        _LOGGER.debug(
+                            f"[on_notify(%s)|%s] STATE Color R: %s, G: %s, B: %s (%s), color temp %s",
+                            self._ble_connection_rnd,
+                            self._ble_device.name,
+                            color_rgb[0],
+                            color_rgb[1],
+                            color_rgb[2],
+                            color_hex,
+                            color_temp_kelvin,
+                        )
+
+                        self._attr_rgb_color = color_rgb
+                        self._attr_color_temp_kelvin = color_temp_kelvin
+
                 _LOGGER.debug(
-                    f"[_get_connection|%s] Trying to connect [%s/%s]",
-                    self._ble_device.address,
-                    (retry_count + 1),
-                    max_retries
+                    f"[_get_connection(%s)|%s] Trying to connect",
+                    self._ble_connection_rnd,
+                    self._ble_device.name,
                 )
-                client = await bleak_retry_connector.establish_connection(BleakClient, self._ble_device,
-                                                                          self._ble_device.address)
-                return client
-            except Exception as e:
-                _LOGGER.warning(f"[_get_connection|%s] Exception: %s", self._ble_device.address, e)
-                retry_count += 1
-                await asyncio.sleep(0.5)
-        else:
-            raise Exception(f"[_get_connection|%s] Connection could not be established", self._ble_device.address)
+
+                client = await bleak_retry_connector.establish_connection(
+                    BleakClient,
+                    self._ble_device,
+                    self._ble_device.name
+                )
+
+                await client.start_notify(GOVEE_READ_CHAR, on_notify)
+                client.set_disconnected_callback(on_disconnect)
+
+                self._ble_client = client
+
+            return self._ble_client
+        except Exception as e:
+            _LOGGER.warning(
+                f"[_get_connection(%s)|%s] Exception: %s",
+                self._ble_connection_rnd,
+                self._ble_device.name,
+                e
+            )
