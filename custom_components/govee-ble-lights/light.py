@@ -22,7 +22,7 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
     light = hass.data[DOMAIN][config_entry.entry_id]
     # bluetooth setup
     ble_device = bluetooth.async_ble_device_from_address(hass, light.address.upper(), False)
-    async_add_entities([GoveeBluetoothLight(light, ble_device)])
+    async_add_entities([GoveeBluetoothLight(ble_device)])
 
 
 class GoveeBluetoothLight(LightEntity):
@@ -33,7 +33,7 @@ class GoveeBluetoothLight(LightEntity):
         "aa050100000000000000000000000000000000",  # color and color temperature
     ]
 
-    def __init__(self, light, ble_device: BLEDevice) -> None:
+    def __init__(self, ble_device: BLEDevice) -> None:
         """Initialize a bluetooth light."""
         self._ble_device = ble_device
         self._ble_client = None
