@@ -51,9 +51,11 @@ class GoveeBluetoothLight(LightEntity):
         self._attr_rgb_color = None
         self._attr_is_on = False
         self._attr_should_poll = True
+        self._attr_icon = "mdi:lightbulb"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, self._ble_device.address)},
-            name=self._ble_device.name
+            name=self._ble_device.name,
+            manufacturer="Govee"
         )
 
     async def async_turn_on(self, **kwargs) -> None:
@@ -138,6 +140,7 @@ class GoveeBluetoothLight(LightEntity):
     async def _get_connection(self) -> BleakClient:
         try:
             if self._ble_client is None or not self._ble_client.is_connected:
+                self._ble_client = None
                 self._ble_connection_rnd = random.randint(1000, 9999)
 
                 def on_disconnect(client):
