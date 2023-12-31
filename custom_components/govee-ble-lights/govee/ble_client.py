@@ -92,9 +92,10 @@ class BleClient:
             _LOGGER.debug(f"[%s] Disconnected from %s", ble_client.address, device.name)
 
         _LOGGER.debug(f"[%s] Connect to %s", device.address, device.name)
-        connection_try_counter = 1
+        connection_try_counter = 0
         while connection_try_counter < MAX_CONNECTION_RETRIES:
             try:
+                connection_try_counter += 1
                 client = BleakClient(device, ble_on_disconnect)
                 await client.connect()
 
