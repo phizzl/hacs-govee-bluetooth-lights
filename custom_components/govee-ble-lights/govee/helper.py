@@ -1,7 +1,11 @@
 import math
-from typing import Optional, Any, Tuple, Dict, Union
+import asyncio
+import logging
+from typing import Optional, Any, Tuple
 from asyncio import Event
 from bleak import BLEDevice
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def rgb_to_hex(red: int, green: int, blue: int) -> str:
@@ -33,6 +37,23 @@ def kelvin_to_rgb(kelvin: int) -> Tuple[int, int, int]:
     r, g, b = map(lambda x: max(0, min(x, 255)), [red, green, blue])
 
     return math.ceil(r), math.ceil(g), math.ceil(b)
+
+
+class ColorResponse:
+    _color_rgb: Tuple[int, int, int]
+    _color_temp_kelvin: int
+
+    def __init__(self, color_rgb: Tuple[int, int, int], color_temp_kelvin: int):
+        self._color_rgb = color_rgb
+        self._color_temp_kelvin = color_temp_kelvin
+
+    @property
+    def color_rgb(self) -> Tuple[int, int, int]:
+        return self._color_rgb
+
+    @property
+    def color_temp_kelvin(self) -> int:
+        return self._color_temp_kelvin
 
 
 class ResponseEvent(Event):
@@ -68,12 +89,14 @@ class ResponseProcessor:
         else:
             brightness = int(response[4:6], 16)
 
-        brightness_percent = math.ceil(((brightness / 64) * 100))
+        brightness_percent = round(((brightness / 64) * 100))
+        if brightness_percent == 0:
+            brightness_percent = 1
 
         return brightness_percent
 
     @staticmethod
-    def process_color_status_request(event: ResponseEvent) -> Optional[Dict[str, Union[Tuple[int, int, int], int]]]:
+    def process_color_status_request(event: ResponseEvent) -> Optional[ColorResponse]:
         response = event.response.hex()
         if not response.startswith("aa05"):
             return None
@@ -85,6 +108,13 @@ class ResponseProcessor:
         else:
             color_rgb = hex_to_rgb(response[6:12])
 
-        return {"color_rgb": color_rgb, "color_temp_kelvin": color_temp_kelvin}
+        return ColorResponse(color_rgb, color_temp_kelvin)
 
 
+async def wait_for_event_with_timeout(event: ResponseEvent, timeout: int = 20) -> bool:
+    try:
+        await asyncio.wait_for(event.wait(), timeout)
+        return True
+    except asyncio.TimeoutError:
+        _LOGGER.debug(f"[{event.device.address}] Event timed out")
+        return False
