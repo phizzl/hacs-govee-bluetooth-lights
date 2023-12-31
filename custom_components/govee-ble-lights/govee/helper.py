@@ -56,8 +56,11 @@ class ColorResponse:
         return self._color_temp_kelvin
 
 
-class ResponseEvent(Event):
+class DeviceEvent(Event):
     device: BLEDevice
+
+
+class ResponseEvent(DeviceEvent):
     request: bytes
     response: Optional[bytes]
     notify_response: Optional[Any]
@@ -111,7 +114,7 @@ class ResponseProcessor:
         return ColorResponse(color_rgb, color_temp_kelvin)
 
 
-async def wait_for_event_with_timeout(event: ResponseEvent, timeout: int = 20) -> bool:
+async def wait_for_event_with_timeout(event: DeviceEvent, timeout: int = 20) -> bool:
     try:
         await asyncio.wait_for(event.wait(), timeout)
         return True
