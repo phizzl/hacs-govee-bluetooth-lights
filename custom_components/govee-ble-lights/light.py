@@ -16,7 +16,14 @@ from .govee.ble_client import BleClient
 from .govee.helper import wait_for_event_with_timeout, kelvin_to_rgb
 
 _LOGGER = logging.getLogger(__name__)
-SCAN_INTERVAL = timedelta(seconds=5)
+
+# Only scan every 15 minutes for changes
+SCAN_INTERVAL = timedelta(minutes=15)
+
+# Serialize async_update calls, even though they are async capable.
+# Avoid making too much parallel BLE calls
+# This is read by HA.
+PARALLEL_UPDATES = 1
 
 
 async def async_setup_entry(hass, config_entry, async_add_entities):
@@ -43,7 +50,6 @@ class GoveeBluetoothLight(LightEntity):
         self._attr_max_color_temp_kelvin = 6500
         self._attr_rgb_color = None
         self._attr_is_on = False
-        self._attr_should_poll = False
         self._attr_icon = "mdi:lightbulb"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, self._ble_device.address)},
@@ -88,16 +94,11 @@ class GoveeBluetoothLight(LightEntity):
             self._attr_color_temp_kelvin = color_temp_kelvin
             self.async_write_ha_state()
 
-        self._attr_should_poll = True
-        self.async_write_ha_state()
-
     async def async_turn_off(self, **kwargs) -> None:
         _LOGGER.debug(f"[%s] Powering on", self._ble_device.name)
         power_state_request = BleLightRequestFactory.create_power_state_request(False)
         event = await BleClient.send_request(self._ble_device, power_state_request)
         await wait_for_event_with_timeout(event)
-
-        self._attr_should_poll = True
 
     async def async_update(self):
         _LOGGER.debug(f"[%s] Update triggered", self._ble_device.name)
@@ -120,8 +121,6 @@ class GoveeBluetoothLight(LightEntity):
             color = event.notify_response
             self._attr_rgb_color = color.color_rgb
             self._attr_color_temp_kelvin = color.color_temp_kelvin
-
-        self._attr_should_poll = False
 
         _LOGGER.debug(
             f"[%s] Power state: %s | Brightness: %s | Color: %s | Color temperature %s",
