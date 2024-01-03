@@ -6,7 +6,7 @@ from typing import Dict
 from bleak import BLEDevice, BleakClient, BleakGATTCharacteristic, BleakError
 from .ble_requests import BleRequest
 from .const import GOVEE_READ_CHAR, GOVEE_WRITE_CHAR, GOVEE_SERVICE_UUID
-from .helper import ResponseEvent, wait_for_event_with_timeout
+from .helper import ResponseEvent
 
 _LOGGER = logging.getLogger(__name__)
 
